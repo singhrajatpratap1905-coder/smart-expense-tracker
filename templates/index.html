@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Smart Expense Tracker</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+  <link rel="stylesheet" href="/static/style.css?v=4"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+
+  <!-- ========== AUTH SCREEN ========== -->
+  <div id="authScreen" class="auth-screen">
+    <div class="auth-card">
+      <div class="auth-logo">💰 ExpenseTracker</div>
+      <p class="auth-sub">Track your spending, grow your savings.</p>
+
+      <!-- Clerk Sign In Container -->
+      <div id="clerk-sign-in" style="width: 100%; display: flex; justify-content: center; margin-top: 1.5rem;"></div>
+
+      <div id="authError" class="auth-error"></div>
+    </div>
+  </div>
+
+  <!-- ========== MAIN APP (hidden until logged in) ========== -->
+  <div id="appScreen" style="display:none">
+
+    <!-- PILL NAVBAR -->
+    <div class="pill-nav-container">
+      <nav class="pill-nav" aria-label="Primary" style="--base: #5A67D8; --pill-bg: var(--card-bg); --hover-text: #ffffff; --pill-text: var(--text);">
+        <a class="pill-logo" href="#" aria-label="Home" id="pillLogo">
+          <div style="font-size: 20px;">💰</div>
+        </a>
+        <div class="pill-nav-items desktop-only" id="pillNavItems">
+          <ul class="pill-list" role="menubar">
+            <li role="none">
+              <a role="menuitem" href="#" class="pill is-active" onclick="window.scrollTo({top:0, behavior:'smooth'}); return false;">
+                <span class="hover-circle" aria-hidden="true"></span>
+                <span class="label-stack">
+                  <span class="pill-label">Dashboard</span>
+                  <span class="pill-label-hover" aria-hidden="true">Dashboard</span>
+                </span>
+              </a>
+            </li>
+            <li role="none">
+              <a role="menuitem" href="#" class="pill" onclick="exportPDF(); return false;">
+                <span class="hover-circle" aria-hidden="true"></span>
+                <span class="label-stack">
+                  <span class="pill-label">Export PDF</span>
+                  <span class="pill-label-hover" aria-hidden="true">Export PDF</span>
+                </span>
+              </a>
+            </li>
+            <li role="none">
+              <a role="menuitem" href="#" class="pill" onclick="toggleTheme(); return false;">
+                <span class="hover-circle" aria-hidden="true"></span>
+                <span class="label-stack">
+                  <span class="pill-label">Theme</span>
+                  <span class="pill-label-hover" aria-hidden="true">Theme</span>
+                </span>
+              </a>
+            </li>
+            <li role="none">
+              <a role="menuitem" href="#" class="pill" onclick="handleLogout(); return false;">
+                <span class="hover-circle" aria-hidden="true"></span>
+                <span class="label-stack">
+                  <span class="pill-label">Sign Out</span>
+                  <span class="pill-label-hover" aria-hidden="true">Sign Out</span>
+                </span>
+              </a>
+            </li>
+          </ul>
+        </div>
+        <button class="mobile-menu-button mobile-only" id="mobileMenuBtn" aria-label="Toggle menu">
+          <span class="hamburger-line"></span>
+          <span class="hamburger-line"></span>
+        </button>
+      </nav>
+
+      <!-- Mobile Menu -->
+      <div class="mobile-menu-popover mobile-only" id="mobileMenu" style="--base: #5A67D8; --pill-bg: var(--card-bg); --hover-text: #ffffff; --pill-text: var(--text);">
+        <ul class="mobile-menu-list">
+          <li><a href="#" class="mobile-menu-link is-active" onclick="window.scrollTo({top:0, behavior:'smooth'}); closeMobileMenu(); return false;">Dashboard</a></li>
+          <li><a href="#" class="mobile-menu-link" onclick="exportPDF(); closeMobileMenu(); return false;">Export PDF</a></li>
+          <li><a href="#" class="mobile-menu-link" onclick="toggleTheme(); closeMobileMenu(); return false;">Toggle Theme</a></li>
+          <li><a href="#" class="mobile-menu-link" onclick="handleLogout(); closeMobileMenu(); return false;">Sign Out</a></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="container">
+
+      <div class="hero">
+        <h1 id="welcomeMsg">Welcome back</h1>
+        <p>Track your spending, grow your savings. Here's your financial overview.</p>
+        <div style="margin-top: 16px; display: flex; align-items: center; gap: 12px;">
+          <span class="user-badge" id="userBadge"></span>
+          <span class="nav-date" id="navDate" style="color: var(--text-secondary); font-size: 13px; font-weight: 500;"></span>
+        </div>
+      </div>
+
+      <!-- TOP STATS CARDS -->
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-icon">💰</div>
+          <div><div class="label">Total Income</div><div class="value green" id="stat-income">₹0</div></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">🛒</div>
+          <div><div class="label">Total Spent</div><div class="value red" id="stat-expense">₹0</div></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">🏦</div>
+          <div><div class="label">Savings</div><div class="value blue" id="stat-savings">₹0</div></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">📊</div>
+          <div><div class="label">Transactions</div><div class="value" id="stat-count">0</div></div>
+        </div>
+      </div>
+
+      <!-- MAIN GRID -->
+      <div class="main-grid">
+
+        <!-- LEFT: ADD TRANSACTION -->
+        <div class="card form-card">
+          <h2>Add Transaction</h2>
+
+          <!-- NATURAL LANGUAGE ADD -->
+          <div class="nl-add-bar">
+            <input type="text" id="nlInput" placeholder='Type naturally: "Spent 500 at Zomato yesterday"' onkeydown="if(event.key==='Enter')parseNL()"/>
+            <button onclick="parseNL()" class="nl-btn">Auto-Parse</button>
+          </div>
+
+          <div class="voice-bar" id="voiceBar">
+            <div class="voice-dot" id="voiceDot"></div>
+            <span id="voiceText">Tap to speak — "Spent 250 at Zomato"</span>
+          </div>
+
+          <div class="section-label">Quick Add</div>
+          <div class="quick-grid">
+            <button class="quick-btn" onclick="quickFill('Zomato','Food')">Food</button>
+            <button class="quick-btn" onclick="quickFill('Uber','Travel')">Travel</button>
+            <button class="quick-btn" onclick="quickFill('BigBasket','Groceries')">Grocery</button>
+            <button class="quick-btn" onclick="quickFill('Amazon','Shopping')">Shopping</button>
+            <button class="quick-btn" onclick="quickFill('Netflix','Entertainment')">Movies</button>
+            <button class="quick-btn" onclick="quickFill('Apollo','Healthcare')">Health</button>
+            <button class="quick-btn" onclick="quickFill('Electricity','Bills')">Bills</button>
+            <button class="quick-btn" onclick="quickFill('','Others')">Other</button>
+          </div>
+
+          <div class="field">
+            <label>Merchant / Description</label>
+            <input type="text" id="merchant" placeholder="e.g. Zomato, Amazon, Rent..." autocomplete="off" oninput="suggest(this.value)"/>
+            <div id="suggestions" class="suggestions"></div>
+          </div>
+
+          <div class="row">
+            <div class="field">
+              <label>Amount (₹)</label>
+              <input type="number" id="amount" placeholder="0"/>
+            </div>
+            <div class="field">
+              <label>Category</label>
+              <select id="category">
+                <option value="">Auto-detect category</option>
+                <option>Food</option><option>Groceries</option><option>Travel</option>
+                <option>Shopping</option><option>Entertainment</option>
+                <option>Healthcare</option><option>Bills</option><option>Others</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="field">
+              <label>Type</label>
+              <select id="txntype"><option>Expense</option><option>Income</option></select>
+            </div>
+            <div class="field">
+              <label>Date</label>
+              <input type="date" id="date"/>
+            </div>
+          </div>
+
+          <div class="field">
+            <label>Note (optional)</label>
+            <input type="text" id="note" placeholder="Add a note..."/>
+          </div>
+
+          <div class="scan-box" id="scanBox">
+            <input type="file" id="receiptFile" accept="image/*" style="display:none" onchange="scanReceipt(this)"/>
+            <div onclick="document.getElementById('receiptFile').click()">
+              Upload receipt — AI extracts details automatically
+            </div>
+          </div>
+
+          <!-- AI STATEMENT UPLOAD ZONE -->
+          <div class="statement-upload-zone" id="statementUploadZone">
+            <div class="statement-header">
+              <span class="statement-icon">🏦</span>
+              <h3>AI Bank Statement Sync</h3>
+            </div>
+            <textarea id="statementText" class="statement-textarea" placeholder="Paste your bank SMS alerts, UPI messages, or CSV statement text here...&#10;&#10;Example:&#10;INR 150.00 debited from A/c XX1234 on 25-Mar-26. UPI: rahulsharma@okhdfcbank. Ref 412345678901"></textarea>
+            <button class="statement-btn" onclick="processStatement()">
+              <span class="statement-btn-text">⚡ Scan & Extract Transactions</span>
+              <div class="statement-spinner" id="statementSpinner"></div>
+            </button>
+          </div>
+
+          <button class="save-btn" onclick="saveTransaction()">Save Transaction</button>
+          <div id="statusMsg" class="status-msg"></div>
+
+          <!-- AI INSIGHTS (Moved here for better space utilization) -->
+          <div class="card ai-insights-card" style="margin-top: 20px;">
+            <h2>AI Insights</h2>
+            <div id="aiInsights" class="ai-insights-content">
+              <div class="ai-loading">Analyzing your spending patterns...</div>
+            </div>
+          </div>
+        </div>
+
+    <!-- STATEMENT REVIEW MODAL -->
+    <div class="modal-overlay" id="statementReviewModal" style="display:none">
+      <div class="modal review-modal">
+        <div class="modal-header">
+          <h2>📋 Review Extracted Transactions</h2>
+          <button class="modal-close" onclick="closeReviewModal()">&times;</button>
+        </div>
+        <p class="review-hint">Edit merchant names or categories below. Changes will be remembered for future scans!</p>
+        <div class="review-table-wrap">
+          <table class="review-table" id="reviewTable">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Amount</th>
+                <th>Merchant / Shop</th>
+                <th>UPI ID</th>
+                <th>Category</th>
+                <th>Type</th>
+              </tr>
+            </thead>
+            <tbody id="reviewTableBody"></tbody>
+          </table>
+        </div>
+        <div class="review-actions">
+          <button class="save-btn" onclick="approveStatementTransactions()">✅ Approve & Save All</button>
+          <button class="clear-btn" onclick="closeReviewModal()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+        <!-- RIGHT COLUMN -->
+        <div class="right-column">
+          <div class="card">
+            <h2>Spending by Category</h2>
+            <div class="chart-container"><canvas id="pieChart"></canvas></div>
+            <div id="chartEmpty" class="empty-state">No data yet. Add your first transaction!</div>
+          </div>
+
+          <div class="card">
+            <h2>Monthly Overview</h2>
+            <div class="chart-container"><canvas id="barChart"></canvas></div>
+          </div>
+
+
+          <!-- SPENDING TRENDS -->
+          <div class="card">
+            <h2>Spending Trends (30 Days)</h2>
+            <div class="chart-container"><canvas id="trendsChart"></canvas></div>
+          </div>
+
+          <!-- HEATMAP CALENDAR -->
+          <div class="card">
+            <h2>Spending Heatmap</h2>
+            <div id="heatmapContainer" class="heatmap-container"></div>
+            <div class="heatmap-legend">
+              <span>Less</span>
+              <div class="heatmap-cell" style="background:var(--hm-1)"></div>
+              <div class="heatmap-cell" style="background:var(--hm-2)"></div>
+              <div class="heatmap-cell" style="background:var(--hm-3)"></div>
+              <div class="heatmap-cell" style="background:var(--hm-4)"></div>
+              <span>More</span>
+            </div>
+          </div>
+
+          <!-- MONTHLY BUDGETS -->
+          <div class="card">
+            <div class="card-header">
+              <h2>Monthly Budgets</h2>
+              <button class="clear-btn" onclick="openBudgetModal()" style="color:var(--accent);border-color:var(--accent)">Set Budget</button>
+            </div>
+            <div id="budgetsList">
+              <div class="ai-loading">Loading budgets...</div>
+            </div>
+          </div>
+
+          <!-- RECURRING SUBSCRIPTIONS -->
+          <div class="card">
+            <div class="card-header">
+              <h2>Subscriptions & Bills</h2>
+              <button class="clear-btn" onclick="openSubModal()" style="color:var(--accent);border-color:var(--accent)">Add New</button>
+            </div>
+            <div id="subsList">
+              <div class="ai-loading">Loading subscriptions...</div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h2>Recent Transactions</h2>
+              <button class="clear-btn" onclick="clearAll()">Clear All</button>
+            </div>
+            <div id="txnList"></div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- VANILLA GSAP MAC DOCK -->
+      <div class="dock-outer" id="vanillaDock">
+        <div class="dock-panel" id="dockPanel" role="toolbar" aria-label="Application dock">
+          <div class="dock-item" onclick="window.scrollTo({top:0, behavior:'smooth'})">
+            <div class="dock-icon" style="font-size:22px;">🏠</div>
+            <div class="dock-label">Home</div>
+          </div>
+          <div class="dock-item" onclick="document.getElementById('receiptFile').click()">
+            <div class="dock-icon" style="font-size:22px;">📸</div>
+            <div class="dock-label">Scan Receipt</div>
+          </div>
+          <div class="dock-item" onclick="openBudgetModal()">
+            <div class="dock-icon" style="font-size:22px;">📊</div>
+            <div class="dock-label">Set Budget</div>
+          </div>
+          <div class="dock-item" onclick="toggleAiChat()">
+            <div class="dock-icon" style="font-size:22px;">✨</div>
+            <div class="dock-label">AI Chat</div>
+          </div>
+          <div class="dock-item" onclick="handleLogout()">
+            <div class="dock-icon" style="font-size:22px;">🚪</div>
+            <div class="dock-label">Log Out</div>
+          </div>
+        </div>
+      </div>
+
+      <footer class="footer">
+        <p>Built with ❤️ using Flask + Chart.js + Gemini AI | Smart Expense Tracker v3.0</p>
+      </footer>
+    </div>
+  </div>
+
+  <!-- 2FA MODAL (Removed) -->
+
+  <!-- BUDGET MODAL -->
+  <div class="modal-overlay" id="budgetModal" style="display:none">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Set Category Budget</h3>
+        <button onclick="closeBudgetModal()" class="ai-chat-close">✕</button>
+      </div>
+      <div style="padding: 20px;">
+        <div class="field">
+          <label>Category</label>
+          <select id="budgetCategory">
+            <option>Food</option><option>Groceries</option><option>Travel</option>
+            <option>Shopping</option><option>Entertainment</option>
+            <option>Healthcare</option><option>Bills</option><option>Others</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Monthly Limit (₹)</label>
+          <input type="number" id="budgetAmount" placeholder="e.g. 5000"/>
+        </div>
+        <button class="save-btn" onclick="saveBudget()">Save Budget</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SUBSCRIPTION MODAL -->
+  <div class="modal-overlay" id="subModal" style="display:none">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Add Subscription</h3>
+        <button onclick="closeSubModal()" class="ai-chat-close">✕</button>
+      </div>
+      <div style="padding: 20px;">
+        <div class="field">
+          <label>Name (e.g. Netflix, Rent)</label>
+          <input type="text" id="subName" placeholder="Subscription Name"/>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label>Amount (₹)</label>
+            <input type="number" id="subAmount" placeholder="e.g. 499"/>
+          </div>
+          <div class="field">
+            <label>Category</label>
+            <select id="subCategory">
+              <option>Entertainment</option><option>Bills</option>
+              <option>Healthcare</option><option>Others</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label>Next Due Date</label>
+          <input type="date" id="subDate"/>
+        </div>
+        <button class="save-btn" onclick="saveSubscription()">Add Subscription</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- AI CHAT DRAWER -->
+  <button class="ai-fab" id="aiFab" onclick="toggleAiChat()">AI</button>
+  <div class="ai-chat-drawer" id="aiChatDrawer">
+    <div class="ai-chat-header">
+      <span>AI Finance Assistant</span>
+      <button onclick="toggleAiChat()" class="ai-chat-close">✕</button>
+    </div>
+    <div class="ai-chat-messages" id="aiChatMessages">
+      <div class="ai-msg bot">Hi! I'm your AI finance assistant. Ask me anything about your expenses.</div>
+      <div class="ai-suggestions">
+        <button onclick="askAi('How much did I spend this month?')">Total spending?</button>
+        <button onclick="askAi('What is my biggest expense category?')">Biggest category?</button>
+        <button onclick="askAi('Give me saving tips based on my spending')">Saving tips?</button>
+      </div>
+    </div>
+    <div class="ai-chat-input">
+      <input type="text" id="aiChatInput" placeholder="Ask about your expenses..." onkeydown="if(event.key==='Enter')sendAiChat()"/>
+      <button onclick="sendAiChat()">➤</button>
+    </div>
+  </div>
+
+  <script>
+    window.__CLERK_PUBLISHABLE_KEY__ = '{{ clerk_publishable_key }}';
+  </script>
+  <script crossorigin="anonymous"
+    data-clerk-publishable-key="{{ clerk_publishable_key }}"
+    src="https://quick-dane-37.clerk.accounts.dev/npm/@clerk/clerk-js@latest/dist/clerk.browser.js">
+  </script>
+  <script src="/static/app.js?v=6"></script>
+
+  <!-- TARGET CURSOR -->
+  <div id="targetCursor" class="target-cursor-wrapper" style="display: none;">
+    <div class="target-cursor-dot" id="targetCursorDot"></div>
+    <div class="target-cursor-corner corner-tl"></div>
+    <div class="target-cursor-corner corner-tr"></div>
+    <div class="target-cursor-corner corner-br"></div>
+    <div class="target-cursor-corner corner-bl"></div>
+  </div>
+</body>
+</html>

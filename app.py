@@ -1,20 +1,51 @@
-from flask import Flask, request, jsonify, render_template
-import sqlite3, re, datetime, io, os, jwt, hashlib, secrets
-from functools import wraps
+from flask import Flask, request, jsonify, render_template, send_file
+import sqlite3, re, datetime, io, os, jwt, hashlib, secrets, json, base64, time
 from dotenv import load_dotenv
 
 load_dotenv()
+from jwt import PyJWKClient
+from fpdf import FPDF
+import pyotp, qrcode
+from functools import wraps
 
 try:
-    from PIL import Image
+    from PIL import Image, ImageFilter
     import pytesseract
+    # Set Tesseract path for Windows — adjust if installed elsewhere
+    if os.name == 'nt':
+        tesseract_path = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+        if os.path.exists(tesseract_path):
+            pytesseract.pytesseract.tesseract_cmd = tesseract_path
     OCR_ENABLED = True
 except ImportError:
     OCR_ENABLED = False
 
-app = Flask(__name__,
-            template_folder=os.path.join('venv', 'Backend', 'templates'),
-            static_folder=os.path.join('venv', 'Backend', 'static'))
+# ============ GEMINI AI SETUP ============
+try:
+    import google.generativeai as genai
+    GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
+    if GEMINI_API_KEY:
+        genai.configure(api_key=GEMINI_API_KEY)
+        gemini_model = genai.GenerativeModel('gemini-2.0-flash-lite')
+        AI_ENABLED = True
+    else:
+        AI_ENABLED = False
+except ImportError:
+    AI_ENABLED = False
+
+def gemini_generate(content, retries=3):
+    """Call Gemini with auto-retry on rate limits."""
+    for attempt in range(retries):
+        try:
+            return gemini_model.generate_content(content)
+        except Exception as e:
+            if '429' in str(e) and attempt < retries - 1:
+                wait = (attempt + 1) * 10  # 10s, 20s, 30s
+                time.sleep(wait)
+            else:
+                raise
+
+app = Flask(__name__)
 
 # ============ CONFIG ============
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY')
@@ -33,8 +64,20 @@ def init_db():
         email TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
         salt TEXT NOT NULL,
+        totp_secret TEXT,
+        totp_enabled INTEGER DEFAULT 0,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
+
+    # Add TOTP columns to existing tables (migration)
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN totp_secret TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN totp_enabled INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
 
     # Transactions table — now with user_id foreign key
     cursor.execute("""
@@ -50,29 +93,72 @@ def init_db():
         FOREIGN KEY (user_id) REFERENCES users(id)
     )""")
 
+    # Budgets table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS budgets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        category TEXT NOT NULL,
+        amount INTEGER NOT NULL,
+        UNIQUE(user_id, category),
+        FOREIGN KEY (user_id) REFERENCES users(id)
+    )""")
+
+    # Subscriptions table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS subscriptions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        amount INTEGER NOT NULL,
+        category TEXT NOT NULL,
+        next_due_date TEXT NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+    )""")
+
+    # Aliases table (For Indian UPI Name mapping)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS merchant_aliases (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        original_name TEXT NOT NULL,
+        alias_name TEXT NOT NULL,
+        category TEXT NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES users(id),
+        UNIQUE(user_id, original_name)
+    )""")
+
+    # Add upi_id column to existing transactions table for precise tracking
+    try:
+        cursor.execute("ALTER TABLE transactions ADD COLUMN upi_id TEXT")
+    except sqlite3.OperationalError:
+        pass
+
     conn.commit()
     conn.close()
 
 init_db()
 
-# ============ PASSWORD HELPERS ============
-def hash_password(password: str, salt: str) -> str:
-    return hashlib.sha256((password + salt).encode()).hexdigest()
+# ============ CLERK JWKS SETUP ============
+CLERK_FRONTEND_API = os.environ.get('CLERK_FRONTEND_API')
 
-def verify_password(password: str, salt: str, stored_hash: str) -> bool:
-    return hash_password(password, salt) == stored_hash
-
-# ============ JWT HELPERS ============
-def create_token(user_id: int, username: str) -> str:
-    payload = {
-        'user_id': user_id,
-        'username': username,
-        'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=JWT_EXPIRY_HOURS)
-    }
-    return jwt.encode(payload, app.config['SECRET_KEY'], algorithm='HS256')
+# We only initialize the PyJWKClient if the URL is set and not a placeholder
+jwks_client = None
+if CLERK_FRONTEND_API and "YOUR_CLERK" not in CLERK_FRONTEND_API:
+    jwks_client = PyJWKClient(f"{CLERK_FRONTEND_API}/.well-known/jwks.json")
 
 def decode_token(token: str) -> dict:
-    return jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
+    if not jwks_client:
+        # Development fallback: Decode without verification if keys aren't set
+        return jwt.decode(token, options={"verify_signature": False})
+        
+    signing_key = jwks_client.get_signing_key_from_jwt(token)
+    return jwt.decode(
+        token, 
+        signing_key.key, 
+        algorithms=["RS256"], 
+        options={"verify_aud": False}
+    )
 
 # ============ AUTH DECORATOR ============
 def jwt_required(f):
@@ -86,10 +172,35 @@ def jwt_required(f):
             payload = decode_token(token)
         except jwt.ExpiredSignatureError:
             return jsonify({'error': 'Token expired. Please log in again.'}), 401
-        except jwt.InvalidTokenError:
-            return jsonify({'error': 'Invalid token'}), 401
-        request.user_id = payload['user_id']
-        request.username = payload['username']
+        except Exception as e:
+            return jsonify({'error': f'Invalid token: {str(e)}'}), 401
+            
+        clerk_id = payload.get('sub') # Clerk uses 'sub' to store user ID
+        
+        # Ensure user exists in our DB, map clerk_id to our internal integer ID
+        conn = sqlite3.connect("database.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM users WHERE username=?", (clerk_id,))
+        row = cursor.fetchone()
+        if not row:
+            try:
+                # First time logging in, map clerk user to our SQLite DB
+                cursor.execute(
+                    "INSERT INTO users (username, email, password_hash, salt) VALUES (?, ?, ?, ?)",
+                    (clerk_id, clerk_id, 'clerk_managed', 'clerk_managed')
+                )
+                user_id = cursor.lastrowid
+                conn.commit()
+            except sqlite3.IntegrityError:
+                # Race condition: another concurrent request just inserted this user
+                cursor.execute("SELECT id FROM users WHERE username=?", (clerk_id,))
+                user_id = cursor.fetchone()[0]
+        else:
+            user_id = row[0]
+        conn.close()
+
+        request.user_id = user_id
+        request.username = clerk_id
         return f(*args, **kwargs)
     return decorated
 
@@ -112,75 +223,11 @@ def auto_categorize(merchant):
         return "Bills"
     return "Others"
 
-# ============ AUTH ROUTES ============
-
-@app.route('/register', methods=['POST'])
-def register():
-    data = request.json
-    username = data.get('username', '').strip()
-    email    = data.get('email', '').strip().lower()
-    password = data.get('password', '')
-
-    if not username or not email or not password:
-        return jsonify({'error': 'Username, email and password are required'}), 400
-    if len(password) < 6:
-        return jsonify({'error': 'Password must be at least 6 characters'}), 400
-    if not re.match(r'^[^@]+@[^@]+\.[^@]+$', email):
-        return jsonify({'error': 'Invalid email format'}), 400
-
-    salt = secrets.token_hex(16)
-    password_hash = hash_password(password, salt)
-
-    try:
-        conn = sqlite3.connect("database.db")
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO users (username, email, password_hash, salt) VALUES (?, ?, ?, ?)",
-            (username, email, password_hash, salt)
-        )
-        user_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-    except sqlite3.IntegrityError as e:
-        conn.close()
-        if 'username' in str(e):
-            return jsonify({'error': 'Username already taken'}), 409
-        return jsonify({'error': 'Email already registered'}), 409
-
-    token = create_token(user_id, username)
-    return jsonify({'token': token, 'username': username}), 201
-
-
-@app.route('/login', methods=['POST'])
-def login():
-    data = request.json
-    identifier = data.get('identifier', '').strip()  # username or email
-    password   = data.get('password', '')
-
-    if not identifier or not password:
-        return jsonify({'error': 'Identifier and password are required'}), 400
-
-    conn = sqlite3.connect("database.db")
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT id, username, password_hash, salt FROM users WHERE username=? OR email=?",
-        (identifier, identifier.lower())
-    )
-    row = cursor.fetchone()
-    conn.close()
-
-    if not row or not verify_password(password, row[3], row[2]):
-        return jsonify({'error': 'Invalid credentials'}), 401
-
-    token = create_token(row[0], row[1])
-    return jsonify({'token': token, 'username': row[1]})
-
-
 # ============ TRANSACTION ROUTES (all protected) ============
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template('index.html', clerk_publishable_key=os.environ.get('CLERK_PUBLISHABLE_KEY', ''))
 
 
 @app.route('/add', methods=['POST'])
@@ -275,13 +322,604 @@ def clear_all():
 @jwt_required
 def scan_receipt():
     if not OCR_ENABLED:
-        return jsonify({"error": "Tesseract not installed. Run: pip install pytesseract pillow"}), 400
-    file = request.files['receipt']
-    img = Image.open(io.BytesIO(file.read()))
-    text = pytesseract.image_to_string(img)
-    amount_match = re.search(r'(?:total|amount|rs\.?|₹)\s*(\d+)', text.lower())
-    amount = amount_match.group(1) if amount_match else None
-    return jsonify({"extracted_amount": amount, "raw_text": text})
+        return jsonify({"error": "Tesseract OCR is not available. Install pytesseract, Pillow, and the Tesseract engine."}), 400
+
+    file = request.files.get('receipt')
+    if not file:
+        return jsonify({"error": "No receipt image uploaded"}), 400
+
+    try:
+        img = Image.open(io.BytesIO(file.read()))
+        # Preprocess: convert to grayscale for better OCR accuracy
+        img = img.convert('L')
+        text = pytesseract.image_to_string(img)
+    except Exception as e:
+        return jsonify({"error": f"OCR processing failed: {str(e)}"}), 500
+
+    lower = text.lower()
+
+    # --- Extract amount ---
+    amount = None
+    # Try "Total", "Grand Total", "Amount Due", etc. patterns first
+    amt_patterns = [
+        r'(?:grand\s*total|total\s*amount|amount\s*due|net\s*amount|total)\s*[:\-]?\s*[₹rs\.]*\s*([\d,]+(?:\.\d{1,2})?)',
+        r'[₹]\s*([\d,]+(?:\.\d{1,2})?)',
+        r'rs\.?\s*([\d,]+(?:\.\d{1,2})?)',
+    ]
+    for pat in amt_patterns:
+        match = re.search(pat, lower)
+        if match:
+            amount = match.group(1).replace(',', '')
+            break
+
+    # --- Extract merchant (first non-empty line is often the store name) ---
+    merchant = None
+    for line in text.strip().split('\n'):
+        line = line.strip()
+        if len(line) > 2 and not re.match(r'^[\d\s\-/:.₹]+$', line):
+            merchant = line.title()
+            break
+
+    # --- Extract date ---
+    date = None
+    date_patterns = [
+        r'(\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4})',
+        r'(\d{4}[/\-]\d{1,2}[/\-]\d{1,2})',
+    ]
+    for pat in date_patterns:
+        match = re.search(pat, text)
+        if match:
+            date = match.group(1)
+            break
+
+    return jsonify({
+        "extracted_amount": amount,
+        "extracted_merchant": merchant,
+        "extracted_date": date,
+        "raw_text": text
+    })
+
+
+# ============ GEMINI AI ROUTES ============
+
+def get_user_transactions_text(user_id):
+    """Helper: fetch all transactions for a user as formatted text for AI context."""
+    conn = sqlite3.connect("database.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT amount, merchant, category, type, date, note FROM transactions WHERE user_id=? ORDER BY date DESC",
+        (user_id,)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    if not rows:
+        return "No transactions recorded yet."
+    lines = []
+    for r in rows:
+        line = f"{r[3]} | ₹{r[0]} | {r[1]} | {r[2]} | {r[4]}"
+        if r[5]:
+            line += f" | Note: {r[5]}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+@app.route('/ai/scan_receipt', methods=['POST'])
+@jwt_required
+def ai_scan_receipt():
+    if not AI_ENABLED:
+        return jsonify({"error": "Gemini AI is not configured. Set GEMINI_API_KEY."}), 400
+
+    file = request.files.get('receipt')
+    if not file:
+        return jsonify({"error": "No receipt image uploaded"}), 400
+
+    try:
+        img_bytes = file.read()
+        img_b64 = base64.b64encode(img_bytes).decode('utf-8')
+        mime = file.content_type or 'image/jpeg'
+
+        prompt = """Analyze this receipt image and extract the following in JSON format:
+{
+  "amount": <total amount as a number>,
+  "merchant": "<store/merchant name>",
+  "date": "<date in YYYY-MM-DD format if visible, else null>",
+  "items": ["<item1>", "<item2>", ...],
+  "category": "<one of: Food, Groceries, Shopping, Travel, Entertainment, Healthcare, Bills, Others>"
+}
+Return ONLY the JSON, no extra text."""
+
+        response = gemini_generate([
+            prompt,
+            {"mime_type": mime, "data": img_b64}
+        ])
+
+        text = response.text.strip()
+        # Clean markdown code fences if present
+        if text.startswith('```'):
+            text = re.sub(r'^```(?:json)?\s*', '', text)
+            text = re.sub(r'```\s*$', '', text)
+
+        data = json.loads(text)
+        return jsonify({"success": True, **data})
+    except json.JSONDecodeError:
+        return jsonify({"success": True, "raw_text": response.text, "amount": None, "merchant": None, "date": None, "category": None})
+    except Exception as e:
+        return jsonify({"error": f"AI processing failed: {str(e)}"}), 500
+
+
+@app.route('/ai/categorize', methods=['POST'])
+@jwt_required
+def ai_categorize():
+    if not AI_ENABLED:
+        # Fallback to keyword matcher
+        merchant = request.json.get('merchant', '')
+        return jsonify({"category": auto_categorize(merchant)})
+
+    data = request.json
+    merchant = data.get('merchant', '')
+    note = data.get('note', '')
+
+    prompt = f"""Categorize this expense into exactly ONE of these categories:
+Food, Groceries, Shopping, Travel, Entertainment, Healthcare, Bills, Others
+
+Merchant: {merchant}
+Note: {note}
+
+Respond with ONLY the category name, nothing else."""
+
+    try:
+        response = gemini_generate(prompt)
+        category = response.text.strip()
+        valid = ['Food', 'Groceries', 'Shopping', 'Travel', 'Entertainment', 'Healthcare', 'Bills', 'Others']
+        if category not in valid:
+            category = auto_categorize(merchant)
+        return jsonify({"category": category})
+    except Exception:
+        return jsonify({"category": auto_categorize(merchant)})
+
+
+@app.route('/ai/insights', methods=['GET'])
+@jwt_required
+def ai_insights():
+    if not AI_ENABLED:
+        return jsonify({"error": "Gemini AI is not configured. Set GEMINI_API_KEY."}), 400
+
+    txn_text = get_user_transactions_text(request.user_id)
+    if txn_text == "No transactions recorded yet.":
+        return jsonify({"insights": "Add some transactions first, and I'll analyze your spending patterns! 📊"})
+
+    prompt = f"""You are a personal finance advisor. Analyze these expenses and give 3-5 short, actionable insights.
+Use emoji for visual appeal. Be specific with numbers and percentages.
+Keep each insight to 1-2 sentences. Format as a bullet list.
+
+Transaction history (Type | Amount | Merchant | Category | Date):
+{txn_text}
+
+Provide insights:"""
+
+    try:
+        response = gemini_generate(prompt)
+        return jsonify({"insights": response.text.strip()})
+    except Exception as e:
+        return jsonify({"error": f"AI error: {str(e)}"}), 500
+
+
+@app.route('/ai/chat', methods=['POST'])
+@jwt_required
+def ai_chat():
+    if not AI_ENABLED:
+        return jsonify({"error": "Gemini AI is not configured. Set GEMINI_API_KEY."}), 400
+
+    question = request.json.get('message', '').strip()
+    if not question:
+        return jsonify({"error": "No message provided"}), 400
+
+    txn_text = get_user_transactions_text(request.user_id)
+
+    prompt = f"""You are a helpful finance assistant for an expense tracker app.
+Answer the user's question based on their transaction data below.
+Be concise (2-4 sentences max). Use ₹ for currency. Use emoji sparingly.
+If the data doesn't contain the answer, say so honestly.
+
+Transaction history (Type | Amount | Merchant | Category | Date):
+{txn_text}
+
+User question: {question}
+
+Answer:"""
+
+    try:
+        response = gemini_generate(prompt)
+        return jsonify({"reply": response.text.strip()})
+    except Exception as e:
+        return jsonify({"error": f"AI error: {str(e)}"}), 500
+
+
+# ============ PDF EXPORT ============
+@app.route('/export/pdf', methods=['GET'])
+@jwt_required
+def export_pdf():
+    conn = sqlite3.connect("database.db")
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT SUM(amount) FROM transactions WHERE user_id=? AND type='Income'", (request.user_id,))
+    income = cursor.fetchone()[0] or 0
+    cursor.execute("SELECT SUM(amount) FROM transactions WHERE user_id=? AND type='Expense'", (request.user_id,))
+    expense = cursor.fetchone()[0] or 0
+
+    cursor.execute(
+        "SELECT category, SUM(amount) FROM transactions WHERE user_id=? AND type='Expense' GROUP BY category",
+        (request.user_id,)
+    )
+    by_cat = cursor.fetchall()
+
+    cursor.execute(
+        "SELECT amount, merchant, category, type, date, note FROM transactions WHERE user_id=? ORDER BY date DESC",
+        (request.user_id,)
+    )
+    txns = cursor.fetchall()
+    conn.close()
+
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=15)
+
+    # Title
+    pdf.set_font('Helvetica', 'B', 20)
+    pdf.cell(0, 12, 'Expense Report', new_x='LMARGIN', new_y='NEXT', align='C')
+    pdf.set_font('Helvetica', '', 10)
+    pdf.cell(0, 8, f'Generated: {datetime.date.today().strftime("%d %B %Y")}  |  User: {request.username}', new_x='LMARGIN', new_y='NEXT', align='C')
+    pdf.ln(8)
+
+    # Summary
+    pdf.set_font('Helvetica', 'B', 13)
+    pdf.cell(0, 10, 'Summary', new_x='LMARGIN', new_y='NEXT')
+    pdf.set_font('Helvetica', '', 11)
+    pdf.cell(60, 8, f'Total Income: Rs.{income:,}')
+    pdf.cell(60, 8, f'Total Expense: Rs.{expense:,}')
+    pdf.cell(0, 8, f'Savings: Rs.{income - expense:,}', new_x='LMARGIN', new_y='NEXT')
+    pdf.ln(6)
+
+    # Category breakdown
+    if by_cat:
+        pdf.set_font('Helvetica', 'B', 13)
+        pdf.cell(0, 10, 'By Category', new_x='LMARGIN', new_y='NEXT')
+        pdf.set_font('Helvetica', 'B', 10)
+        pdf.set_fill_color(79, 70, 229)
+        pdf.set_text_color(255, 255, 255)
+        pdf.cell(95, 8, 'Category', border=1, fill=True)
+        pdf.cell(95, 8, 'Amount', border=1, fill=True, new_x='LMARGIN', new_y='NEXT')
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_font('Helvetica', '', 10)
+        for cat, amt in by_cat:
+            pdf.cell(95, 7, str(cat), border=1)
+            pdf.cell(95, 7, f'Rs.{amt:,}', border=1, new_x='LMARGIN', new_y='NEXT')
+        pdf.ln(6)
+
+    # Transaction list
+    if txns:
+        pdf.set_font('Helvetica', 'B', 13)
+        pdf.cell(0, 10, f'All Transactions ({len(txns)})', new_x='LMARGIN', new_y='NEXT')
+        pdf.set_font('Helvetica', 'B', 9)
+        pdf.set_fill_color(79, 70, 229)
+        pdf.set_text_color(255, 255, 255)
+        pdf.cell(25, 7, 'Date', border=1, fill=True)
+        pdf.cell(25, 7, 'Type', border=1, fill=True)
+        pdf.cell(50, 7, 'Merchant', border=1, fill=True)
+        pdf.cell(35, 7, 'Category', border=1, fill=True)
+        pdf.cell(25, 7, 'Amount', border=1, fill=True)
+        pdf.cell(30, 7, 'Note', border=1, fill=True, new_x='LMARGIN', new_y='NEXT')
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_font('Helvetica', '', 9)
+        for t in txns:
+            pdf.cell(25, 6, str(t[4] or '')[:10], border=1)
+            pdf.cell(25, 6, str(t[3]), border=1)
+            pdf.cell(50, 6, str(t[1])[:20], border=1)
+            pdf.cell(35, 6, str(t[2]), border=1)
+            pdf.cell(25, 6, f'Rs.{t[0]:,}', border=1)
+            pdf.cell(30, 6, str(t[5] or '')[:12], border=1, new_x='LMARGIN', new_y='NEXT')
+
+    buf = io.BytesIO()
+    pdf.output(buf)
+    buf.seek(0)
+    return send_file(buf, mimetype='application/pdf', as_attachment=True, download_name=f'expense_report_{datetime.date.today()}.pdf')
+
+
+# ============ NATURAL LANGUAGE ADD ============
+@app.route('/ai/parse', methods=['POST'])
+@jwt_required
+def ai_parse():
+    if not AI_ENABLED:
+        return jsonify({'error': 'Gemini AI not configured'}), 400
+
+    text = request.json.get('text', '').strip()
+    if not text:
+        return jsonify({'error': 'No text provided'}), 400
+
+    today = str(datetime.date.today())
+    prompt = f"""Parse this expense description into JSON. Today's date is {today}.
+Categories: Food, Groceries, Shopping, Travel, Entertainment, Healthcare, Bills, Others
+Types: Expense, Income
+
+Text: "{text}"
+
+Return ONLY JSON:
+{{"amount": <number>, "merchant": "<name>", "category": "<category>", "type": "Expense or Income", "date": "YYYY-MM-DD", "note": "<optional note>"}}"""
+
+    try:
+        response = gemini_generate(prompt)
+        result = response.text.strip()
+        if result.startswith('```'):
+            result = re.sub(r'^```(?:json)?\s*', '', result)
+            result = re.sub(r'```\s*$', '', result)
+        data = json.loads(result)
+        return jsonify({'success': True, **data})
+    except json.JSONDecodeError:
+        return jsonify({'success': False, 'error': 'Could not parse AI response'}), 400
+    except Exception as e:
+        return jsonify({'error': f'AI error: {str(e)}'}), 500
+
+# ============ AI STATEMENT UPLOADER & ALIAS ENGINE ============
+@app.route('/api/upload_statement', methods=['POST'])
+@jwt_required
+def upload_statement():
+    if not AI_ENABLED:
+        return jsonify({'error': 'Gemini AI not configured'}), 400
+
+    text = request.json.get('text', '').strip()
+    if not text:
+        return jsonify({'error': 'No text provided'}), 400
+
+    prompt = f"""You are an expert financial data extractor specializing in Indian UPI SMS and bank statements.
+Given the following raw text, extract every single transaction. 
+Critically: For the "merchant" field, extract the exact UPI ID (e.g., name@okhdfcbank), VPA, or raw Business Descriptor. Do not summarize it.
+
+Return ONLY a JSON array of objects.
+Format:
+[{{
+  "date": "YYYY-MM-DD",
+  "amount": <number>,
+  "merchant": "<Raw extracted UPI ID or Name>",
+  "category": "<Guessed Category (Food, Groceries, Shopping, Travel, Entertainment, Healthcare, Bills, Others)>",
+  "type": "Expense" or "Income",
+  "upi_id": "<UPI ID if found, else empty string>"
+}}]
+
+Text to parse:
+"{text}"
+"""
+    try:
+        response = gemini_generate(prompt)
+        result = response.text.strip()
+        if result.startswith('```'):
+            result = re.sub(r'^```(?:json)?\s*', '', result)
+            result = re.sub(r'```\s*$', '', result)
+        
+        parsed_txns = json.loads(result)
+        if not isinstance(parsed_txns, list):
+            parsed_txns = [parsed_txns]
+
+        # Apply Aliases
+        conn = sqlite3.connect("database.db")
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        for txn in parsed_txns:
+            ident = txn.get('upi_id') or txn.get('merchant', '')
+            cursor.execute(
+                "SELECT alias_name, category FROM merchant_aliases WHERE user_id=? AND original_name=?",
+                (request.user_id, ident)
+            )
+            alias = cursor.fetchone()
+            if alias:
+                txn['original_merchant'] = txn['merchant'] # Keep for UI reference
+                txn['merchant'] = alias['alias_name']
+                txn['category'] = alias['category']
+                txn['is_aliased'] = True
+            else:
+                txn['is_aliased'] = False
+
+        conn.close()
+        return jsonify(parsed_txns)
+        
+    except json.JSONDecodeError:
+        return jsonify({'error': 'Failed to parse AI response into JSON. Check text density.'}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/transactions/bulk', methods=['POST'])
+@jwt_required
+def bulk_transactions():
+    txns = request.json.get('transactions', [])
+    if not txns:
+        return jsonify({'error': 'No transactions provided'}), 400
+
+    conn = sqlite3.connect("database.db")
+    cursor = conn.cursor()
+    
+    for t in txns:
+        cursor.execute(
+            '''INSERT INTO transactions (user_id, amount, merchant, category, type, date, upi_id) 
+               VALUES (?, ?, ?, ?, ?, ?, ?)''',
+            (request.user_id, t.get('amount'), t.get('merchant'), t.get('category'), 
+             t.get('type', 'Expense'), t.get('date'), t.get('upi_id', ''))
+        )
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'count': len(txns)})
+
+
+@app.route('/api/aliases', methods=['POST'])
+@jwt_required
+def save_alias():
+    original_name = request.json.get('original_name')
+    alias_name = request.json.get('alias_name')
+    category = request.json.get('category', 'Others')
+
+    if not original_name or not alias_name:
+        return jsonify({'error': 'Missing names'}), 400
+
+    conn = sqlite3.connect("database.db")
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            '''INSERT INTO merchant_aliases (user_id, original_name, alias_name, category) 
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(user_id, original_name) DO UPDATE SET alias_name=excluded.alias_name, category=excluded.category''',
+            (request.user_id, original_name, alias_name, category)
+        )
+        conn.commit()
+        success = True
+    except Exception as e:
+        success = False
+        print("Alias Error:", e)
+    finally:
+        conn.close()
+
+    return jsonify({'success': success})
+
+# ============ TRENDS & HEATMAP DATA ============
+@app.route('/trends', methods=['GET'])
+@jwt_required
+def trends_data():
+    conn = sqlite3.connect("database.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT date, SUM(amount) FROM transactions WHERE user_id=? AND type='Expense' AND date IS NOT NULL GROUP BY date ORDER BY date",
+        (request.user_id,)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return jsonify(rows)
+
+
+@app.route('/heatmap', methods=['GET'])
+@jwt_required
+def heatmap_data():
+    conn = sqlite3.connect("database.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT date, SUM(amount) FROM transactions WHERE user_id=? AND type='Expense' AND date IS NOT NULL GROUP BY date",
+        (request.user_id,)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return jsonify(dict(rows))
+
+
+# ============ BUDGETS ============
+@app.route('/budgets', methods=['GET', 'POST'])
+@jwt_required
+def handle_budgets():
+    conn = sqlite3.connect("database.db")
+    cursor = conn.cursor()
+
+    if request.method == 'POST':
+        data = request.json
+        category = data.get('category')
+        amount = int(data.get('amount', 0))
+        if not category or amount <= 0:
+            return jsonify({'error': 'Invalid category or amount'}), 400
+            
+        cursor.execute("""
+            INSERT INTO budgets (user_id, category, amount) 
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id, category) DO UPDATE SET amount=excluded.amount
+        """, (request.user_id, category, amount))
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True})
+
+    # GET: fetch budgets + current month spend
+    cursor.execute("SELECT category, amount FROM budgets WHERE user_id=?", (request.user_id,))
+    budgets = {row[0]: row[1] for row in cursor.fetchall()}
+
+    # Calculate current month spend per category
+    current_month = datetime.date.today().strftime('%Y-%m')
+    cursor.execute("""
+        SELECT category, SUM(amount) FROM transactions 
+        WHERE user_id=? AND type='Expense' AND date LIKE ?
+        GROUP BY category
+    """, (request.user_id, f"{current_month}%"))
+    spent = {row[0]: row[1] for row in cursor.fetchall()}
+
+    conn.close()
+    
+    result = []
+    for cat, limit in budgets.items():
+        result.append({
+            'category': cat,
+            'limit': limit,
+            'spent': spent.get(cat, 0)
+        })
+    return jsonify(result)
+
+
+# ============ SUBSCRIPTIONS ============
+@app.route('/subscriptions', methods=['GET', 'POST'])
+@jwt_required
+def handle_subscriptions():
+    conn = sqlite3.connect("database.db")
+    cursor = conn.cursor()
+
+    if request.method == 'POST':
+        data = request.json
+        name = data.get('name')
+        amount = int(data.get('amount', 0))
+        category = data.get('category')
+        start_date = data.get('start_date', str(datetime.date.today()))
+        
+        if not name or amount <= 0:
+            return jsonify({'error': 'Invalid name or amount'}), 400
+            
+        cursor.execute(
+            "INSERT INTO subscriptions (user_id, name, amount, category, next_due_date) VALUES (?, ?, ?, ?, ?)",
+            (request.user_id, name, amount, category, start_date)
+        )
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True})
+
+    # GET: Auto-pay any due subscriptions first
+    today = str(datetime.date.today())
+    cursor.execute("SELECT id, name, amount, category, next_due_date FROM subscriptions WHERE user_id=? AND next_due_date <= ?", (request.user_id, today))
+    due_subs = cursor.fetchall()
+    
+    for sub in due_subs:
+        sub_id, name, amount, category, due_date = sub
+        # Insert as expense transaction
+        cursor.execute(
+            "INSERT INTO transactions (user_id, amount, merchant, category, type, date, note) VALUES (?, ?, ?, ?, 'Expense', ?, ?)",
+            (request.user_id, amount, name, category, due_date, 'Auto-paid subscription')
+        )
+        
+        # Calculate next due date (add 1 month roughly)
+        due = datetime.datetime.strptime(due_date, "%Y-%m-%d")
+        next_month = due.replace(day=28) + datetime.timedelta(days=4)
+        next_due = next_month.replace(day=min(due.day, 28)).strftime("%Y-%m-%d") # simplified 1 month
+        
+        cursor.execute("UPDATE subscriptions SET next_due_date=? WHERE id=?", (next_due, sub_id))
+    
+    if due_subs:
+        conn.commit()
+
+    # Return active subscriptions
+    cursor.execute("SELECT id, name, amount, category, next_due_date FROM subscriptions WHERE user_id=? ORDER BY next_due_date", (request.user_id,))
+    subs = [{"id": r[0], "name": r[1], "amount": r[2], "category": r[3], "next_due_date": r[4]} for r in cursor.fetchall()]
+    conn.close()
+    
+    return jsonify(subs)
+
+@app.route('/subscriptions/<int:sub_id>', methods=['DELETE'])
+@jwt_required
+def delete_subscription(sub_id):
+    conn = sqlite3.connect("database.db")
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM subscriptions WHERE id=? AND user_id=?", (sub_id, request.user_id))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
 
 
 if __name__ == '__main__':
