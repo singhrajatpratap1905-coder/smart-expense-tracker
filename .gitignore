@@ -1,56 +1,17 @@
-# ============================================
-# Environment & Secrets
-# ============================================
+# Environment variables - Do not commit secrets!
 .env
-.env.*
-!.env.example
 
-# ============================================
-# Python
-# ============================================
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-*.egg
-*.egg-info/
-dist/
-build/
-eggs/
-*.manifest
-*.spec
-
-# Virtual environments
+# Python virtual environment
 venv/
-env/
-.venv/
+__pycache__/
+*.pyc
 
-# ============================================
-# Database
-# ============================================
-*.db
-*.sqlite3
+# SQLite Database
+database.db
 
-# ============================================
-# IDE / Editor
-# ============================================
+# IDE / Editor specific
 .vscode/
 .idea/
-*.swp
-*.swo
-*~
-.DS_Store
-Thumbs.db
 
-# ============================================
-# OS Files
-# ============================================
-desktop.ini
-.DS_Store
-
-# ============================================
-# Misc
-# ============================================
-*.log
-*.pid
-*.seed
+# Tesseract OCR logs
+tesseract.log
