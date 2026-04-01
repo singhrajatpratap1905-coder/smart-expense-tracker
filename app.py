@@ -76,9 +76,11 @@ app.config['AI_INSIGHTS_CACHE'] = {}
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY')
 JWT_EXPIRY_HOURS = 24 * 7  # tokens last 7 days
 
+DB_PATH = os.environ.get('DATABASE_PATH', 'database.db')
+
 # ============ DATABASE SETUP ============
 def init_db():
-    conn = sqlite3.connect("database.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
     cursor.execute("""
@@ -160,7 +162,7 @@ init_db()
 # ============ DATABASE ============
 def get_db():
     if 'db' not in g:
-        g.db = sqlite3.connect("database.db")
+        g.db = sqlite3.connect(DB_PATH)
         g.db.row_factory = sqlite3.Row
     return g.db
 
