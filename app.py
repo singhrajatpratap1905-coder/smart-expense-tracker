@@ -76,7 +76,11 @@ app.config['AI_INSIGHTS_CACHE'] = {}
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY')
 JWT_EXPIRY_HOURS = 24 * 7  # tokens last 7 days
 
-DB_PATH = os.environ.get('DATABASE_PATH', 'database.db')
+# Use /tmp for SQLite database if running on Vercel to prevent read-only filesystem crash
+if os.environ.get("VERCEL") == "1":
+    DB_PATH = os.environ.get('DATABASE_PATH', '/tmp/database.db')
+else:
+    DB_PATH = os.environ.get('DATABASE_PATH', 'database.db')
 
 # ============ DATABASE SETUP ============
 def init_db():
