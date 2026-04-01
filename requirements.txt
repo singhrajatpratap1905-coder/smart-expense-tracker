@@ -1,0 +1,10 @@
+Flask
+python-dotenv
+PyJWT
+fpdf
+pyotp
+qrcode
+Pillow
+pytesseract
+google-generativeai
+py-gfm

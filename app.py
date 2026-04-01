@@ -11,7 +11,6 @@ from functools import wraps
 try:
     from PIL import Image, ImageFilter
     import pytesseract
-    # Set Tesseract path for Windows — adjust if installed elsewhere
     if os.name == 'nt':
         tesseract_path = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
         if os.path.exists(tesseract_path):
@@ -21,33 +20,54 @@ except ImportError:
     OCR_ENABLED = False
 
 # ============ GEMINI AI SETUP ============
+AI_ENABLED = False
+AI_ERROR_MESSAGE = "Gemini AI is not configured. Set GEMINI_API_KEY."
+
+gemini_flash_model = None
+gemini_pro_model = None
+genai = None  # module-level reference
+
 try:
-    import google.generativeai as genai
+    import google.generativeai as genai          # ← correct package
+    from google.api_core.exceptions import ResourceExhausted
+
     GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
-    if GEMINI_API_KEY:
-        genai.configure(api_key=GEMINI_API_KEY)
-        # Based on your available models, we'll use the powerful Gemini 1.5 series.
-        # 'gemini-1.5-flash' is for fast, lightweight tasks like chat and parsing.
-        gemini_flash_model = genai.GenerativeModel('gemini-1.5-flash-latest')
-        # 'gemini-1.5-pro' is for more complex, multimodal tasks like receipt scanning and insights.
-        gemini_pro_model = genai.GenerativeModel('gemini-1.5-pro-latest')
-        AI_ENABLED = True
+    print(f"GEMINI_API_KEY loaded: {'Yes' if GEMINI_API_KEY else 'No'}")
+
+    if not GEMINI_API_KEY:
+        AI_ERROR_MESSAGE = "GEMINI_API_KEY not found in environment. Ensure it is set in a .env file and the application is restarted."
+    elif "YOUR_API_KEY" in GEMINI_API_KEY:
+        AI_ERROR_MESSAGE = "A placeholder API key was found. Please replace it with your actual Gemini API key in the .env file."
     else:
-        AI_ENABLED = False
+        genai.configure(api_key=GEMINI_API_KEY)  # ← configure FIRST, separately
+        gemini_flash_model = genai.GenerativeModel('gemini-2.5-flash')
+        gemini_pro_model   = genai.GenerativeModel('gemini-2.5-flash')
+        AI_ENABLED = True
+        AI_ERROR_MESSAGE = ""
+        print("✅ Gemini AI initialized successfully.")
+
 except ImportError:
-    AI_ENABLED = False
+    AI_ERROR_MESSAGE = "The 'google-generativeai' library is not installed. Please run: pip install google-generativeai"
+    print(f"❌ ImportError: {AI_ERROR_MESSAGE}")
+except Exception as e:
+    AI_ERROR_MESSAGE = f"Gemini AI initialization failed: {str(e)}"
+    print(f"❌ Gemini init error: {AI_ERROR_MESSAGE}")
+
 
 def gemini_generate(content, model, retries=3):
     """Call a specific Gemini model with auto-retry on rate limits."""
     for attempt in range(retries):
         try:
             return model.generate_content(content)
-        except Exception as e:
-            if '429' in str(e) and attempt < retries - 1:
-                wait = (attempt + 1) * 10  # 10s, 20s, 30s
+        except ResourceExhausted:
+            if attempt < retries - 1:
+                wait = (2 ** attempt) + random.random()
                 time.sleep(wait)
             else:
                 raise
+        except Exception:
+            raise
+
 
 app = Flask(__name__)
 app.config['AI_INSIGHTS_CACHE'] = {}
@@ -61,7 +81,6 @@ def init_db():
     conn = sqlite3.connect("database.db")
     cursor = conn.cursor()
 
-    # Users table
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,7 +93,6 @@ def init_db():
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
 
-    # Add TOTP columns to existing tables (migration)
     try:
         cursor.execute("ALTER TABLE users ADD COLUMN totp_secret TEXT")
     except sqlite3.OperationalError:
@@ -84,7 +102,6 @@ def init_db():
     except sqlite3.OperationalError:
         pass
 
-    # Transactions table — now with user_id foreign key
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS transactions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -98,7 +115,6 @@ def init_db():
         FOREIGN KEY (user_id) REFERENCES users(id)
     )""")
 
-    # Budgets table
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS budgets (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,7 +125,6 @@ def init_db():
         FOREIGN KEY (user_id) REFERENCES users(id)
     )""")
 
-    # Subscriptions table
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS subscriptions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -121,7 +136,6 @@ def init_db():
         FOREIGN KEY (user_id) REFERENCES users(id)
     )""")
 
-    # Aliases table (For Indian UPI Name mapping)
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS merchant_aliases (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -133,7 +147,6 @@ def init_db():
         UNIQUE(user_id, original_name)
     )""")
 
-    # Add upi_id column to existing transactions table for precise tracking
     try:
         cursor.execute("ALTER TABLE transactions ADD COLUMN upi_id TEXT")
     except sqlite3.OperationalError:
@@ -144,7 +157,7 @@ def init_db():
 
 init_db()
 
-# ============ DATABASE
+# ============ DATABASE ============
 def get_db():
     if 'db' not in g:
         g.db = sqlite3.connect("database.db")
@@ -156,24 +169,22 @@ def close_db(e=None):
     db = g.pop('db', None)
     if db is not None:
         db.close()
+
 # ============ CLERK JWKS SETUP ============
 CLERK_FRONTEND_API = os.environ.get('CLERK_FRONTEND_API')
 
-# We only initialize the PyJWKClient if the URL is set and not a placeholder
 jwks_client = None
 if CLERK_FRONTEND_API and "YOUR_CLERK" not in CLERK_FRONTEND_API:
     jwks_client = PyJWKClient(f"{CLERK_FRONTEND_API}/.well-known/jwks.json")
 
 def decode_token(token: str) -> dict:
     if not jwks_client:
-        # Development fallback: Decode without verification if keys aren't set
         return jwt.decode(token, options={"verify_signature": False})
-        
     signing_key = jwks_client.get_signing_key_from_jwt(token)
     return jwt.decode(
-        token, 
-        signing_key.key, 
-        algorithms=["RS256"], 
+        token,
+        signing_key.key,
+        algorithms=["RS256"],
         options={"verify_aud": False}
     )
 
@@ -191,17 +202,15 @@ def jwt_required(f):
             return jsonify({'error': 'Token expired. Please log in again.'}), 401
         except Exception as e:
             return jsonify({'error': f'Invalid token: {str(e)}'}), 401
-            
-        clerk_id = payload.get('sub') # Clerk uses 'sub' to store user ID
-        
-        # Ensure user exists in our DB, map clerk_id to our internal integer ID
+
+        clerk_id = payload.get('sub')
+
         db = get_db()
         cursor = db.cursor()
         cursor.execute("SELECT id FROM users WHERE username=?", (clerk_id,))
         row = cursor.fetchone()
         if not row:
             try:
-                # First time logging in, map clerk user to our SQLite DB
                 cursor.execute(
                     "INSERT INTO users (username, email, password_hash, salt) VALUES (?, ?, ?, ?)",
                     (clerk_id, clerk_id, 'clerk_managed', 'clerk_managed')
@@ -209,7 +218,6 @@ def jwt_required(f):
                 user_id = cursor.lastrowid
                 db.commit()
             except sqlite3.IntegrityError:
-                # Race condition: another concurrent request just inserted this user
                 db.rollback()
                 cursor.execute("SELECT id FROM users WHERE username=?", (clerk_id,))
                 user_id = cursor.fetchone()[0]
@@ -222,13 +230,11 @@ def jwt_required(f):
     return decorated
 
 def invalidate_insights_cache(user_id):
-    """Helper to clear the AI insights cache for a user."""
     cache = app.config.get('AI_INSIGHTS_CACHE', {})
     if user_id in cache:
         del cache[user_id]
 
 # ============ AUTO CATEGORIZE ============
-
 def auto_categorize(merchant):
     m = merchant.lower()
     if any(x in m for x in ["zomato","swiggy","domino","kfc","mcdonalds","food"]):
@@ -247,12 +253,17 @@ def auto_categorize(merchant):
         return "Bills"
     return "Others"
 
-# ============ TRANSACTION ROUTES (all protected) ============
-
+# ============ TRANSACTION ROUTES ============
 @app.route('/')
 def index():
-    return render_template('index.html', clerk_publishable_key=os.environ.get('CLERK_PUBLISHABLE_KEY', ''))
+    # Add a cache-busting version based on the current time
+    # This ensures browsers always fetch the latest JS and CSS files during development
+    cache_version = int(time.time())
+    return render_template('index.html', clerk_publishable_key=os.environ.get('CLERK_PUBLISHABLE_KEY', ''), cache_version=cache_version)
 
+@app.route('/login')
+def login():
+    return render_template('login.html', clerk_publishable_key=os.environ.get('CLERK_PUBLISHABLE_KEY', ''))
 
 @app.route('/add', methods=['POST'])
 @jwt_required
@@ -294,7 +305,6 @@ def get_transactions():
 def delete_transaction(txn_id):
     db = get_db()
     cursor = db.cursor()
-    # Only delete if it belongs to the requesting user
     cursor.execute(
         "DELETE FROM transactions WHERE id=? AND user_id=?",
         (txn_id, request.user_id)
@@ -323,7 +333,7 @@ def summary():
     by_category = cursor.fetchall()
     cursor.execute("SELECT COUNT(*) as count FROM transactions WHERE user_id=?", (request.user_id,))
     transaction_count = cursor.fetchone()['count'] or 0
-    
+
     return jsonify({
         "income": income,
         "expense": expense,
@@ -356,7 +366,6 @@ def scan_receipt():
 
     try:
         img = Image.open(io.BytesIO(file.read()))
-        # Preprocess: convert to grayscale for better OCR accuracy
         img = img.convert('L')
         text = pytesseract.image_to_string(img)
     except Exception as e:
@@ -364,9 +373,7 @@ def scan_receipt():
 
     lower = text.lower()
 
-    # --- Extract amount ---
     amount = None
-    # Try "Total", "Grand Total", "Amount Due", etc. patterns first
     amt_patterns = [
         r'(?:grand\s*total|total\s*amount|amount\s*due|net\s*amount|total)\s*[:\-]?\s*[₹Rs\.]*\s*([\d,]+(?:\.\d{1,2})?)',
         r'[₹]\s*([\d,]+(?:\.\d{1,2})?)',
@@ -378,7 +385,6 @@ def scan_receipt():
             amount = match.group(1).replace(',', '')
             break
 
-    # --- Extract merchant (first non-empty line is often the store name) ---
     merchant = None
     for line in text.strip().split('\n'):
         line = line.strip()
@@ -386,7 +392,6 @@ def scan_receipt():
             merchant = line.title()
             break
 
-    # --- Extract date ---
     date = None
     date_patterns = [
         r'(\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4})',
@@ -407,9 +412,7 @@ def scan_receipt():
 
 
 # ============ GEMINI AI ROUTES ============
-
 def get_user_transactions_text(user_id, limit=50):
-    """Helper: fetch recent transactions for a user as formatted text for AI context."""
     db = get_db()
     cursor = db.cursor()
     cursor.execute(
@@ -425,7 +428,6 @@ def get_user_transactions_text(user_id, limit=50):
         if r['note']:
             line += f" | Note: {r['note']}"
         lines.append(line)
-    # Reverse the list so the AI sees the transactions in chronological order
     return "\n".join(reversed(lines))
 
 
@@ -433,7 +435,7 @@ def get_user_transactions_text(user_id, limit=50):
 @jwt_required
 def ai_scan_receipt():
     if not AI_ENABLED:
-        return jsonify({"error": "Gemini AI is not configured. Set GEMINI_API_KEY."}), 400
+        return jsonify({"error": AI_ERROR_MESSAGE}), 400
 
     file = request.files.get('receipt')
     if not file:
@@ -454,13 +456,12 @@ def ai_scan_receipt():
 }
 Return ONLY the JSON, no extra text."""
 
-        response = gemini_generate(([
+        response = gemini_generate([
             prompt,
             {"mime_type": mime, "data": img_b64}
-        ]), model=gemini_pro_model)
+        ], model=gemini_pro_model)
 
         text = getattr(response, "text", "").strip()
-        # Clean markdown code fences if present
         if text.startswith('```'):
             text = re.sub(r'^```(?:json)?\s*', '', text)
             text = re.sub(r'```\s*$', '', text)
@@ -477,7 +478,6 @@ Return ONLY the JSON, no extra text."""
 @jwt_required
 def ai_categorize():
     if not AI_ENABLED:
-        # Fallback to keyword matcher
         merchant = request.json.get('merchant', '')
         return jsonify({"category": auto_categorize(merchant)})
 
@@ -508,7 +508,7 @@ Respond with ONLY the category name, nothing else."""
 @jwt_required
 def ai_insights():
     if not AI_ENABLED:
-        return jsonify({"error": "Gemini AI is not configured. Set GEMINI_API_KEY."}), 400
+        return jsonify({"error": AI_ERROR_MESSAGE}), 400
 
     user_id = request.user_id
     cache = app.config['AI_INSIGHTS_CACHE']
@@ -517,9 +517,8 @@ def ai_insights():
     if force_refresh and user_id in cache:
         del cache[user_id]
 
-    # Check cache first. Cache is invalidated when transactions change.
     if user_id in cache:
-        return jsonify({"insights": cache[user_id], "cached": True}) # Serve from cache
+        return jsonify({"insights": cache[user_id], "cached": True})
 
     txn_text = get_user_transactions_text(request.user_id, limit=50)
     if txn_text == "No transactions recorded yet.":
@@ -537,9 +536,8 @@ Provide insights:"""
     try:
         response = gemini_generate(prompt, model=gemini_pro_model)
         insights_text = getattr(response, "text", "").strip()
-        # Store result in cache for subsequent requests
         cache[user_id] = insights_text
-        return jsonify({"insights": insights_text, "cached": False}) # Newly generated
+        return jsonify({"insights": insights_text, "cached": False})
     except Exception as e:
         return jsonify({"error": f"AI error: {str(e)}"}), 500
 
@@ -548,7 +546,7 @@ Provide insights:"""
 @jwt_required
 def ai_chat():
     if not AI_ENABLED:
-        return jsonify({"error": "Gemini AI is not configured. Set GEMINI_API_KEY."}), 400
+        return jsonify({"error": AI_ERROR_MESSAGE}), 400
 
     question = request.json.get('message', '').strip()
     if not question:
@@ -573,6 +571,9 @@ Answer:"""
         return jsonify({"reply": getattr(response, "text", "").strip()})
     except Exception as e:
         return jsonify({"error": f"AI error: {str(e)}"}), 500
+
+
+
 
 
 # ============ PDF EXPORT ============
@@ -603,14 +604,12 @@ def export_pdf():
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=15)
 
-    # Title
     pdf.set_font('Helvetica', 'B', 20)
     pdf.cell(0, 12, 'Expense Report', new_x='LMARGIN', new_y='NEXT', align='C')
     pdf.set_font('Helvetica', '', 10)
     pdf.cell(0, 8, f'Generated: {datetime.date.today().strftime("%d %B %Y")}  |  User: {request.username}', new_x='LMARGIN', new_y='NEXT', align='C')
     pdf.ln(8)
 
-    # Summary
     pdf.set_font('Helvetica', 'B', 13)
     pdf.cell(0, 10, 'Summary', new_x='LMARGIN', new_y='NEXT')
     pdf.set_font('Helvetica', '', 11)
@@ -619,7 +618,6 @@ def export_pdf():
     pdf.cell(0, 8, f'Savings: Rs.{income - expense:,}', new_x='LMARGIN', new_y='NEXT')
     pdf.ln(6)
 
-    # Category breakdown
     if by_cat:
         pdf.set_font('Helvetica', 'B', 13)
         pdf.cell(0, 10, 'By Category', new_x='LMARGIN', new_y='NEXT')
@@ -635,7 +633,6 @@ def export_pdf():
             pdf.cell(95, 7, f'Rs.{cat["total"]:,}', border=1, new_x='LMARGIN', new_y='NEXT')
         pdf.ln(6)
 
-    # Transaction list
     if txns:
         pdf.set_font('Helvetica', 'B', 13)
         pdf.cell(0, 10, f'All Transactions ({len(txns)})', new_x='LMARGIN', new_y='NEXT')
@@ -672,7 +669,7 @@ def export_pdf():
 @jwt_required
 def ai_parse():
     if not AI_ENABLED:
-        return jsonify({'error': 'Gemini AI not configured'}), 400
+        return jsonify({'error': AI_ERROR_MESSAGE}), 400
 
     text = request.json.get('text', '').strip()
     if not text:
@@ -701,12 +698,13 @@ Return ONLY JSON:
     except Exception as e:
         return jsonify({'error': f'AI error: {str(e)}'}), 500
 
+
 # ============ AI STATEMENT UPLOADER & ALIAS ENGINE ============
 @app.route('/api/upload_statement', methods=['POST'])
 @jwt_required
 def upload_statement():
     if not AI_ENABLED:
-        return jsonify({'error': 'Gemini AI not configured'}), 400
+        return jsonify({'error': AI_ERROR_MESSAGE}), 400
 
     text = request.json.get('text', '').strip()
     if not text:
@@ -736,15 +734,14 @@ Text to parse:
         if result.startswith('```'):
             result = re.sub(r'^```(?:json)?\s*', '', result)
             result = re.sub(r'```\s*$', '', result)
-        
+
         parsed_txns = json.loads(result)
         if not isinstance(parsed_txns, list):
             parsed_txns = [parsed_txns]
 
-        # Apply Aliases
         db = get_db()
         cursor = db.cursor()
-        
+
         for txn in parsed_txns:
             ident = txn.get('upi_id') or txn.get('merchant', '')
             cursor.execute(
@@ -753,7 +750,7 @@ Text to parse:
             )
             alias = cursor.fetchone()
             if alias:
-                txn['original_merchant'] = txn['merchant'] # Keep for UI reference
+                txn['original_merchant'] = txn['merchant']
                 txn['merchant'] = alias['alias_name']
                 txn['category'] = alias['category']
                 txn['is_aliased'] = True
@@ -761,7 +758,7 @@ Text to parse:
                 txn['is_aliased'] = False
 
         return jsonify(parsed_txns)
-        
+
     except json.JSONDecodeError:
         return jsonify({'error': 'Failed to parse AI response into JSON. Check text density.'}), 400
     except Exception as e:
@@ -777,12 +774,12 @@ def bulk_transactions():
 
     db = get_db()
     cursor = db.cursor()
-    
+
     for t in txns:
         cursor.execute(
             '''INSERT INTO transactions (user_id, amount, merchant, category, type, date, upi_id) 
                VALUES (?, ?, ?, ?, ?, ?, ?)''',
-            (request.user_id, t.get('amount'), t.get('merchant'), t.get('category'), 
+            (request.user_id, t.get('amount'), t.get('merchant'), t.get('category'),
              t.get('type', 'Expense'), t.get('date'), t.get('upi_id', ''))
         )
     db.commit()
@@ -815,8 +812,8 @@ def save_alias():
         success = False
         print("Alias Error:", e)
 
-
     return jsonify({'success': success})
+
 
 # ============ TRENDS & HEATMAP DATA ============
 @app.route('/trends', methods=['GET'])
@@ -858,7 +855,7 @@ def handle_budgets():
         amount = int(data.get('amount', 0))
         if not category or amount <= 0:
             return jsonify({'error': 'Invalid category or amount'}), 400
-            
+
         cursor.execute("""
             INSERT INTO budgets (user_id, category, amount) 
             VALUES (?, ?, ?)
@@ -867,12 +864,10 @@ def handle_budgets():
         db.commit()
         return jsonify({'success': True})
 
-    # GET: fetch budgets + current month spend
+    current_month = datetime.date.today().strftime('%Y-%m')
     cursor.execute("SELECT category, amount FROM budgets WHERE user_id=?", (request.user_id,))
     budgets = {row['category']: row['amount'] for row in cursor.fetchall()}
 
-    # Calculate current month spend per category
-    current_month = datetime.date.today().strftime('%Y-%m')
     cursor.execute("""
         SELECT category, SUM(amount) as total FROM transactions 
         WHERE user_id=? AND type='Expense' AND strftime('%Y-%m', date) = ?
@@ -904,10 +899,10 @@ def handle_subscriptions():
         amount = int(data.get('amount', 0))
         category = data.get('category')
         start_date = data.get('start_date', str(datetime.date.today()))
-        
+
         if not name or amount <= 0:
             return jsonify({'error': 'Invalid name or amount'}), 400
-            
+
         cursor.execute(
             "INSERT INTO subscriptions (user_id, name, amount, category, next_due_date) VALUES (?, ?, ?, ?, ?)",
             (request.user_id, name, amount, category, start_date)
@@ -915,33 +910,27 @@ def handle_subscriptions():
         db.commit()
         return jsonify({'success': True})
 
-    # GET: Auto-pay any due subscriptions first
     today = str(datetime.date.today())
     cursor.execute("SELECT id, name, amount, category, next_due_date FROM subscriptions WHERE user_id=? AND next_due_date <= ?", (request.user_id, today))
     due_subs = cursor.fetchall()
-    
+
     for sub in due_subs:
-        # Insert as expense transaction
         cursor.execute(
             "INSERT INTO transactions (user_id, amount, merchant, category, type, date, note) VALUES (?, ?, ?, ?, 'Expense', ?, ?)",
             (request.user_id, sub['amount'], sub['name'], sub['category'], sub['next_due_date'], 'Auto-paid subscription')
         )
-        
-        # Calculate next due date (add 1 month roughly)
         due = datetime.datetime.strptime(str(sub['next_due_date']), "%Y-%m-%d")
         next_month = due.replace(day=28) + datetime.timedelta(days=4)
-        next_due = next_month.replace(day=min(due.day, 28)).strftime("%Y-%m-%d") # simplified 1 month
-        
+        next_due = next_month.replace(day=min(due.day, 28)).strftime("%Y-%m-%d")
         cursor.execute("UPDATE subscriptions SET next_due_date=? WHERE id=?", (next_due, sub['id']))
-    
+
     if due_subs:
         db.commit()
 
-    # Return active subscriptions
     cursor.execute("SELECT id, name, amount, category, next_due_date FROM subscriptions WHERE user_id=? ORDER BY next_due_date", (request.user_id,))
     subs = [dict(row) for row in cursor.fetchall()]
-    
     return jsonify(subs)
+
 
 @app.route('/subscriptions/<int:sub_id>', methods=['DELETE'])
 @jwt_required
@@ -955,4 +944,3 @@ def delete_subscription(sub_id):
 
 if __name__ == '__main__':
     app.run(debug=True)
-

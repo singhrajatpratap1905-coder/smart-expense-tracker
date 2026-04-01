@@ -1,320 +1,448 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Fintrack — Dashboard</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com"/>
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
-  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600&display=swap" rel="stylesheet"/>
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+  <meta name="theme-color" content="#0e0e12">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='icon-192.png') }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Cormorant+Garamond:wght@500;600;700&display=swap"
+    rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v={{ cache_version }}">
 </head>
-<body>
 
-  <!-- ═══ TOPBAR ═══ -->
-  <header class="topbar">
-    <div class="logo"><b>Fin</b>track</div>
-    <nav class="topnav">
-      <div class="tn on">Dashboard</div>
-      <div class="tn">Analytics</div>
-      <div class="tn">Budgets</div>
-      <div class="tn">Goals</div>
-      <div class="tn">Reports</div>
-    </nav>
-    <div class="topright">
-      <button class="topbtn">Export PDF</button>
-      <div class="avatar">SR</div>
-    </div>
-  </header>
+<body style="visibility: hidden;">
+  <div class="ambient"></div>
+  <div class="grid"></div>
+  <div class="noise"></div>
 
-  <div class="shell">
+  <div class="app">
+    <header class="topbar">
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <button class="hamburger ghost-btn" id="hamburger-btn" style="display: none; padding: 4px 10px;">☰</button>
+        <div class="brand">Fintrack</div>
+      </div>
 
-    <!-- ═══ SIDEBAR ═══ -->
+      <nav class="topnav">
+        <a class="nav-link active tn">Dashboard</a>
+        <a class="nav-link tn">Analytics</a>
+        <a class="nav-link tn">Budgets</a>
+        <a class="nav-link tn">Goals</a>
+        <a class="nav-link tn">Reports</a>
+      </nav>
+
+      <div class="top-actions">
+        <button class="outline-btn" id="install-app-btn" style="display: none;">DOWNLOAD APP</button>
+        <button class="outline-btn" id="export-pdf-btn">EXPORT PDF</button>
+        <div class="avatar profile-avatar">SR</div>
+      </div>
+    </header>
+
     <aside class="sidebar">
-      <div class="sb-section">Overview</div>
-      <div class="sb-item on"><div class="sb-dot"></div>Dashboard</div>
-      <div class="sb-item"><div class="sb-dot"></div>Analytics</div>
-      <div class="sb-item"><div class="sb-dot"></div>Transactions<div class="sb-badge">2</div></div>
+      <div>
+        <div class="side-group">
+          <div class="side-title">OVERVIEW</div>
+          <a class="side-link active sb-item"><span>Dashboard</span></a>
+          <a class="side-link sb-item"><span>Analytics</span></a>
+          <a class="side-link sb-item"><span>Transactions</span><span class="badge-mini">2</span></a>
+        </div>
 
-      <div class="sb-section">Manage</div>
-      <div class="sb-item"><div class="sb-dot"></div>Budgets</div>
-      <div class="sb-item"><div class="sb-dot"></div>Accounts</div>
-      <div class="sb-item"><div class="sb-dot"></div>Subscriptions</div>
-      <div class="sb-item"><div class="sb-dot"></div>Goals</div>
+        <div class="side-group">
+          <div class="side-title">MANAGE</div>
+          <a class="side-link sb-item"><span>Budgets</span></a>
+          <a class="side-link sb-item"><span>Accounts</span></a>
+          <a class="side-link sb-item"><span>Subscriptions</span></a>
+          <a class="side-link sb-item"><span>Goals</span></a>
+        </div>
 
-      <div class="sb-section">Tools</div>
-      <div class="sb-item"><div class="sb-dot"></div>AI Assistant</div>
-      <div class="sb-item"><div class="sb-dot"></div>Bank Sync</div>
+        <div class="side-group">
+          <div class="side-title">TOOLS</div>
+          <a class="side-link sb-item"><span>AI Assistant</span></a>
+          <a class="side-link sb-item"><span>Bank Sync</span></a>
+        </div>
+      </div>
 
-      <div class="sb-rule"></div>
-
-      <div class="sb-bottom">
-        <div class="userblock">
-          <div class="avatar" style="width:30px;height:30px;border-radius:7px;font-size:10px;">SR</div>
-          <div class="userblock-info">
-            <p>Singhraj P.</p>
-            <p>singhraj@gmail.com</p>
+      <div>
+        <div class="profile-card">
+          <div class="profile-avatar">SR</div>
+          <div>
+            <strong>User Name</strong>
+            <span>user@example.com</span>
           </div>
         </div>
+        <button id="sign-out-btn" class="ghost-btn"
+          style="width: 100%; margin-top: 10px; color: var(--red); border-color: rgba(242,155,151,.1);">Sign
+          Out</button>
       </div>
     </aside>
 
-    <!-- ═══ MAIN CONTENT ═══ -->
     <main class="content">
-
-      <!-- Greeting -->
-      <div class="greet-bar">
+      <section class="hero">
         <div>
-          <div class="greet-title">Good evening, <em>Singhraj.</em></div>
-          <div class="greet-sub">Your financial overview · March 2026</div>
+          <h1 class="greet-title">Good evening, <em>User</em></h1>
+          <p>Your financial overview · <span id="current-month-text">March 2026</span></p>
         </div>
-        <div class="greet-right">
-          <div class="date-tag">
-            <div class="live-dot"></div>
-            Sunday, 29 March 2026
-          </div>
-          <button class="cta">+ Add Transaction</button>
+        <div class="date-pill date-tag">Sunday, 29 March 2026</div>
+      </section>
+
+      <div class="dashboard-grid">
+        <div class="left-col">
+          <section class="stats">
+            <article class="card stat-card" style="--accent-line: var(--green); animation-delay:.05s;">
+              <div class="eyebrow">TOTAL INCOME</div>
+              <div class="value" id="stat-income" style="color:var(--green)">₹0</div>
+              <div class="soft-tag green">Income recorded</div>
+            </article>
+
+            <article class="card stat-card" style="--accent-line: var(--red); animation-delay:.12s;">
+              <div class="eyebrow">TOTAL SPENT</div>
+              <div class="value" id="stat-expense" style="color:var(--red)">₹0</div>
+              <div class="soft-tag red">This month</div>
+            </article>
+
+            <article class="card stat-card" style="--accent-line: var(--gold); animation-delay:.18s;">
+              <div class="eyebrow">SAVINGS</div>
+              <div class="value" id="stat-savings" style="color:var(--gold)">₹0</div>
+              <div class="soft-tag gold">Net summary</div>
+            </article>
+
+            <article class="card stat-card" style="--accent-line: var(--violet); animation-delay:.24s;">
+              <div class="eyebrow">TRANSACTIONS</div>
+              <div class="value" id="stat-count" style="color:#9f9aff">0</div>
+              <div class="soft-tag violet">All time</div>
+            </article>
+          </section>
+
+          <section class="main-panels">
+            <article class="card transaction-card">
+              <div class="panel-head">
+                <div class="panel-title">NEW TRANSACTION</div>
+                <button class="ghost-btn">Bank Sync</button>
+              </div>
+
+              <div class="action-row">
+                <input class="input" id="nl-input" placeholder='e.g. "Spent 500 at Zomato yesterday"' />
+                <button class="gold-btn" id="nl-parse-btn">AUTO-PARSE</button>
+              </div>
+
+              <div class="voice-box">
+                <span class="voice-dot"></span>
+                Tap to speak your transaction
+              </div>
+
+              <div class="eyebrow" style="margin-bottom:10px;">QUICK CATEGORY</div>
+              <div class="quick-grid">
+                <div class="quick-item qcat" data-category="Food">
+                  <div>🍕</div><span>Food</span>
+                </div>
+                <div class="quick-item qcat" data-category="Travel">
+                  <div>✈️</div><span>Travel</span>
+                </div>
+                <div class="quick-item qcat" data-category="Groceries">
+                  <div>🛒</div><span>Grocery</span>
+                </div>
+                <div class="quick-item qcat" data-category="Shopping">
+                  <div>🛍️</div><span>Shopping</span>
+                </div>
+                <div class="quick-item qcat" data-category="Entertainment">
+                  <div>🎬</div><span>Movies</span>
+                </div>
+                <div class="quick-item qcat" data-category="Healthcare">
+                  <div>💊</div><span>Health</span>
+                </div>
+                <div class="quick-item qcat" data-category="Bills">
+                  <div>💡</div><span>Bills</span>
+                </div>
+                <div class="quick-item qcat" data-category="Others">
+                  <div>📦</div><span>Other</span>
+                </div>
+              </div>
+
+              <div class="form-grid">
+                <div>
+                  <div class="eyebrow" style="margin-bottom:8px;">MERCHANT</div>
+                  <input class="input" id="merchant-input" placeholder="e.g. Zomato" />
+                </div>
+                <div>
+                  <div class="eyebrow" style="margin-bottom:8px;">AMOUNT (₹)</div>
+                  <input class="input" id="amount-input" type="number" placeholder="0" />
+                </div>
+              </div>
+
+              <div class="toggle-row">
+                <div class="toggle-item active" id="expOpt" onclick="setType('Expense')">💸 Expense</div>
+                <div class="toggle-item" id="incOpt" onclick="setType('Income')">🪙 Income</div>
+              </div>
+
+              <div class="form-grid">
+                <div>
+                  <div class="eyebrow" style="margin-bottom:8px;">CATEGORY</div>
+                  <select class="input" id="category-select" style="appearance:none;cursor:pointer;">
+                    <option value="">Auto-detect</option>
+                    <option>Healthcare</option>
+                    <option>Shopping</option>
+                    <option>Food</option>
+                    <option>Travel</option>
+                    <option>Groceries</option>
+                    <option>Entertainment</option>
+                    <option>Bills</option>
+                    <option>Others</option>
+                  </select>
+                </div>
+                <div>
+                  <div class="eyebrow" style="margin-bottom:8px;">DATE</div>
+                  <input class="input" id="date-input" type="date" />
+                </div>
+              </div>
+
+              <div class="eyebrow" style="margin:6px 0 8px;">NOTE (OPTIONAL)</div>
+              <input class="input" id="note-input" placeholder="Add a note..." />
+
+              <div class="dropzone">
+                <div>
+                  <div style="font-size:1.3rem;margin-bottom:8px;">📎</div>
+                  Drop receipt — AI extracts details automatically
+                </div>
+              </div>
+
+              <button class="save-btn" id="save-txn-btn">SAVE TRANSACTION</button>
+            </article>
+
+            <article class="card breakdown-card">
+              <div class="panel-head">
+                <div class="panel-title">SPENDING BREAKDOWN</div>
+                <button class="ghost-btn">This month</button>
+              </div>
+
+              <div class="break-flex">
+                <div style="width: 150px; height: 150px; position: relative;">
+                  <canvas id="spending-breakdown-chart" height="150"></canvas>
+                </div>
+                <div id="donut-legend">
+                  <!-- Filled by JS -->
+                </div>
+              </div>
+
+              <div class="monthly">
+                <div class="panel-title" style="margin-bottom:10px;">MONTHLY OVERVIEW</div>
+                <div style="height: 145px; position: relative;">
+                  <canvas id="monthly-overview-chart"></canvas>
+                </div>
+              </div>
+
+              <div class="heatmap">
+                <div class="panel-title">SPENDING HEATMAP</div>
+                <div class="heatmap-grid">
+                  <span class="heat"></span><span class="heat"></span><span class="heat"></span><span
+                    class="heat"></span><span class="heat"></span><span class="heat"></span><span class="heat"></span>
+                  <span class="heat"></span><span class="heat"></span><span class="heat"></span><span
+                    class="heat"></span><span class="heat"></span><span class="heat"></span><span class="heat"></span>
+                  <span class="heat"></span><span class="heat"></span><span class="heat"></span><span
+                    class="heat"></span><span class="heat"></span><span class="heat"></span><span class="heat"></span>
+                  <span class="heat"></span><span class="heat"></span><span class="heat"></span><span
+                    class="heat"></span><span class="heat"></span><span class="heat"></span><span class="heat"></span>
+                  <span class="heat"></span>
+                </div>
+                <div class="heat-legend">
+                  Less
+                  <span class="box" style="background:#2c2d40"></span>
+                  <span class="box" style="background:#4e4128"></span>
+                  <span class="box" style="background:#7a6330"></span>
+                  <span class="box" style="background:#b89b5c"></span>
+                  <span class="box" style="background:#d3b476"></span>
+                  More
+                </div>
+              </div>
+            </article>
+          </section>
+
+          <article class="card insights-card">
+            <div class="panel-head">
+              <div class="panel-title" style="color:#efc978;">✦ AI INSIGHTS</div>
+              <button class="ghost-btn" id="refresh-insights-btn">Refresh</button>
+            </div>
+
+            <div class="insight-grid" id="insight-grid">
+              <div class="insights-center" style="grid-column: span 3;">
+                Click the button below to generate AI insights based on your recent spending.
+              </div>
+            </div>
+
+            <button class="insight-btn" id="gen-insights-btn">✦ Generate personalized deep insights</button>
+          </article>
         </div>
-      </div>
 
-      <!-- Stat Cards -->
-      <div class="stats">
-        <div class="stat s-in">
-          <div class="stat-rule"></div>
-          <div class="stat-eyebrow">Total Income</div>
-          <div class="stat-num" id="stat-income">₹0</div>
-          <div class="stat-foot">
-            <div class="stat-pill">No income yet</div>
-            <div class="stat-note">Add your first entry</div>
-          </div>
-        </div>
-        <div class="stat s-ex">
-          <div class="stat-rule"></div>
-          <div class="stat-eyebrow">Total Spent</div>
-          <div class="stat-num" id="stat-expense">₹0</div>
-          <div class="stat-foot">
-            <div class="stat-pill">0 transactions</div>
-            <div class="stat-note">This month</div>
-          </div>
-        </div>
-        <div class="stat s-sv">
-          <div class="stat-rule"></div>
-          <div class="stat-eyebrow">Savings</div>
-          <div class="stat-num" id="stat-savings">₹0</div>
-          <div class="stat-foot">
-            <div class="stat-pill">—</div>
-            <div class="stat-note"></div>
-          </div>
-        </div>
-        <div class="stat s-tx">
-          <div class="stat-rule"></div>
-          <div class="stat-eyebrow">Transactions</div>
-          <div class="stat-num" id="stat-count">0</div>
-          <div class="stat-foot">
-            <div class="stat-pill">March</div>
-            <div class="stat-note"></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- 3-Column Row -->
-      <div class="row3">
-
-        <!-- ADD TRANSACTION -->
-        <div class="card">
-          <div class="card-hd">
-            <div class="card-title">New Transaction</div>
-            <div class="card-act">Bank Sync</div>
-          </div>
-
-          <div class="ai-wrap">
-            <input class="ai-field" id="nl-input" type="text" placeholder='e.g. "Spent 500 at Zomato yesterday"'/>
-            <button class="parse-btn" id="nl-parse-btn">AUTO-PARSE</button>
-          </div>
-
-          <div class="voice-strip">
-            <div class="vpulse"></div>
-            <span class="voice-txt">Tap to speak your transaction</span>
-          </div>
-
-          <div class="qcat-label">Quick Category</div>
-          <div class="qcat-row">
-            <div class="qcat" data-category="Food"><span class="qcat-ico">🍕</span><span class="qcat-lbl">Food</span></div>
-            <div class="qcat" data-category="Travel"><span class="qcat-ico">✈️</span><span class="qcat-lbl">Travel</span></div>
-            <div class="qcat" data-category="Groceries"><span class="qcat-ico">🛒</span><span class="qcat-lbl">Grocery</span></div>
-            <div class="qcat" data-category="Shopping"><span class="qcat-ico">🛍️</span><span class="qcat-lbl">Shopping</span></div>
-            <div class="qcat" data-category="Entertainment"><span class="qcat-ico">🎬</span><span class="qcat-lbl">Movies</span></div>
-            <div class="qcat" data-category="Healthcare"><span class="qcat-ico">💊</span><span class="qcat-lbl">Health</span></div>
-            <div class="qcat" data-category="Bills"><span class="qcat-ico">💡</span><span class="qcat-lbl">Bills</span></div>
-            <div class="qcat" data-category="Other"><span class="qcat-ico">📦</span><span class="qcat-lbl">Other</span></div>
-          </div>
-
-          <div class="fgrid">
-            <div class="fg">
-              <label>Merchant</label>
-              <input class="fi" id="merchant-input" type="text" placeholder="e.g. Zomato"/>
+        <div class="right-col">
+          <article class="card recent-card">
+            <div class="panel-head">
+              <div class="panel-title">RECENT</div>
+              <button class="ghost-btn" style="color:#e5988f">Clear all</button>
             </div>
-            <div class="fg">
-              <label>Amount (₹)</label>
-              <input class="fi" id="amount-input" type="number" placeholder="0"/>
+
+            <input class="search txn-search" placeholder="Search merchant..." />
+
+            <div class="filter-row txn-filters">
+              <div class="pill active tf">All</div>
+              <div class="pill tf">Expense</div>
+              <div class="pill tf">Income</div>
             </div>
-          </div>
 
-          <div class="type-seg">
-            <div class="ts-opt on-exp" id="expOpt" onclick="setType('Expense')">💸 Expense</div>
-            <div class="ts-opt" id="incOpt" onclick="setType('Income')">💰 Income</div>
-          </div>
-
-          <div class="fgrid">
-            <div class="fg">
-              <label>Category</label>
-              <select class="fi" id="category-select" style="appearance:none;cursor:pointer;">
-                <option value="">Auto-detect</option>
-                <option>Healthcare</option>
-                <option>Shopping</option>
-                <option>Food</option>
-                <option>Travel</option>
-                <option>Bills</option>
-                <option>Other</option>
-              </select>
+            <div id="txn-list">
+              <!-- Populated by JS -->
             </div>
-            <div class="fg">
-              <label>Date</label>
-              <input class="fi" id="date-input" type="date" value="2026-03-29"/>
-            </div>
-          </div>
+          </article>
 
-          <div class="fg" style="margin-bottom:10px;">
-            <label>Note (optional)</label>
-            <input class="fi" id="note-input" type="text" placeholder="Add a note…"/>
-          </div>
-
-          <div class="receipt-drop" onclick="this.style.borderColor='var(--sand)'">
-            <span class="drop-ico">📎</span>
-            <p>Drop receipt — AI extracts details automatically</p>
-          </div>
-
-          <button class="save-btn" id="save-txn-btn">Save Transaction</button>
-        </div>
-
-        <!-- CHARTS COLUMN -->
-        <div class="card">
-          <div class="card-hd">
-            <div class="card-title">Spending Breakdown</div>
-            <div class="card-act">This month</div>
-          </div>
-
-          <!-- Donut -->
-          <div class="donut-row">
-            <div style="width: 120px; height: 120px; position: relative; margin: 0 auto;">
-              <canvas id="spending-breakdown-chart" height="120"></canvas>
-            </div>
-            <div class="donut-legend" id="donut-legend">
-              <!-- Legend will be populated by JS -->
-            </div>
-          </div>
-
-          <div class="card-divider"></div>
-          <div class="card-title" style="margin-bottom:10px;">Monthly Overview</div>
-
-          <!-- Bar Chart -->
-          <div style="height: 140px;">
-            <canvas id="monthly-overview-chart"></canvas>
-          </div>
-
-          <div class="card-divider"></div>
-          <div class="card-title" style="margin-bottom:10px;">Spending Heatmap</div>
-
-          <!-- Heatmap -->
-          <div class="hm">
-            <div class="hmc"></div><div class="hmc"></div><div class="hmc"></div><div class="hmc"></div><div class="hmc"></div><div class="hmc"></div><div class="hmc"></div>
-            <div class="hmc"></div><div class="hmc"></div><div class="hmc"></div><div class="hmc"></div><div class="hmc"></div><div class="hmc"></div><div class="hmc"></div>
-            <div class="hmc"></div><div class="hmc"></div><div class="hmc"></div><div class="hmc"></div><div class="hmc"></div><div class="hmc"></div><div class="hmc"></div>
-            <div class="hmc"></div><div class="hmc"></div><div class="hmc"></div><div class="hmc"></div><div class="hmc l1"></div><div class="hmc l3"></div><div class="hmc l3"></div>
-          </div>
-          <div class="hm-legend">
-            <span class="hml">Less</span>
-            <div class="hm-scale">
-              <div class="hms" style="background:var(--ink5);"></div>
-              <div class="hms" style="background:#2a1e0e;opacity:.7;"></div>
-              <div class="hms" style="background:var(--sand);opacity:.45;"></div>
-              <div class="hms" style="background:var(--sand);"></div>
-            </div>
-            <span class="hml">More</span>
-          </div>
-        </div>
-
-        <!-- RIGHT STACK -->
-        <div class="col-stack">
-
-          <!-- Recent Transactions -->
-          <div class="card">
-            <div class="card-hd">
-              <div class="card-title">Recent</div>
-              <div class="card-act" style="color:var(--rose);border-color:rgba(196,122,122,.2);">Clear all</div>
-            </div>
-            <input class="txn-search" type="text" placeholder="Search merchant…"/>
-            <div class="txn-filters">
-              <div class="tf on">All</div>
-              <div class="tf">Expense</div>
-              <div class="tf">Income</div>
-            </div>
-            <div class="txn-list" id="txn-list">
-                <!-- Transactions will be populated by JS -->
-            </div>
-          </div>
-
-          <!-- Budgets -->
-          <div class="card">
-            <div class="card-hd">
-              <div class="card-title">Budgets</div>
-              <div class="card-act">Manage</div>
+          <article class="card budget-card">
+            <div class="panel-head">
+              <div class="panel-title">BUDGETS</div>
+              <button class="ghost-btn" id="manage-budget-btn">Manage</button>
             </div>
             <div id="budget-list">
-                <!-- Budgets will be populated by JS -->
+              <!-- Populated by JS -->
             </div>
-          </div>
+          </article>
 
-          <!-- Subscriptions -->
-          <div class="card">
-            <div class="card-hd">
-              <div class="card-title">Subscriptions</div>
-              <div class="card-act">Add New</div>
+          <article class="card subscription-card">
+            <div class="panel-head">
+              <div class="panel-title">SUBSCRIPTIONS</div>
+              <button class="ghost-btn" id="add-subscription-btn">Add New</button>
             </div>
-            <div class="empty-state">No active subscriptions.<br>Add recurring bills to track them.</div>
-          </div>
-
-        </div><!-- /col-stack -->
-      </div><!-- /row3 -->
-
-      <!-- AI INSIGHTS -->
-      <div class="insight-card">
-        <div class="card-hd">
-          <div class="card-title" style="display:flex;align-items:center;gap:7px;color:var(--sand2);">
-            <span>✦</span> AI Insights
-          </div>
-          <div class="card-act" id="refresh-insights-btn">Refresh</div>
+            <div id="subscription-list">
+              <div class="empty-state">No active subscriptions.<br>Add recurring bills to track them.</div>
+            </div>
+          </article>
         </div>
-        <div class="insight-grid" id="insight-grid">
-            <!-- AI Insights will be populated by JS -->
-        </div>
-        <button class="gen-btn">✦ Generate personalized deep insights</button>
       </div>
-
     </main>
   </div>
 
-  <!-- FAB -->
-  <div class="fab-wrap">
-    <button class="fab">✦ Ask AI about your finances</button>
+  <button class="floating-ai" id="ask-ai-btn">✦ ASK AI ABOUT YOUR FINANCES</button>
+
+  <!-- Subscription Modal -->
+  <div id="subscription-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Add Subscription</h2>
+        <button id="close-subscription-modal-btn" class="close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="fgrid">
+          <div>
+            <label>Name</label>
+            <input class="input" id="sub-name-input" type="text" placeholder="e.g. Netflix">
+          </div>
+          <div>
+            <label>Amount (₹)</label>
+            <input class="input" id="sub-amount-input" type="number" placeholder="0">
+          </div>
+        </div>
+        <div class="fgrid">
+          <div>
+            <label>Category</label>
+            <select class="input" id="sub-category-select">
+              <option>Entertainment</option>
+              <option>Bills</option>
+              <option>Shopping</option>
+              <option>Other</option>
+            </select>
+          </div>
+          <div>
+            <label>Start Date</label>
+            <input class="input" id="sub-date-input" type="date">
+          </div>
+        </div>
+        <button id="save-subscription-btn" class="save-btn">Save Subscription</button>
+      </div>
+    </div>
   </div>
+
+  <!-- Budget Modal -->
+  <div id="budget-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Manage Budget</h2>
+        <button id="close-budget-modal-btn" class="close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="fgrid">
+          <div>
+            <label>Category</label>
+            <select class="input" id="budget-category-select">
+              <option>Food</option>
+              <option>Shopping</option>
+              <option>Travel</option>
+              <option>Groceries</option>
+              <option>Entertainment</option>
+              <option>Healthcare</option>
+              <option>Bills</option>
+              <option>Others</option>
+            </select>
+          </div>
+          <div>
+            <label>Monthly Limit (₹)</label>
+            <input class="input" id="budget-amount-input" type="number" placeholder="0">
+          </div>
+        </div>
+        <button id="save-budget-btn" class="save-btn" style="margin-top: 15px;">Save Budget</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- AI Chat Modal -->
+  <div id="ai-chat-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2><span class="sparkle">✦</span> AI Financial Assistant</h2>
+        <button id="close-chat-btn" class="close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="chat-messages" class="chat-messages">
+          <!-- Chat messages will be appended here -->
+        </div>
+        <div class="chat-input-form">
+          <input type="text" id="chat-input" placeholder="Ask about your spending...">
+          <button id="chat-send-btn">Send</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
     window.__CLERK_PUBLISHABLE_KEY__ = '{{ clerk_publishable_key }}';
+  </script>
+  <script>
+    // Development helper: Unregister service workers to ensure fresh assets on reload.
+    // This prevents aggressive caching by the service worker during development.
+    if (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost') {
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(function (registrations) {
+          for (let registration of registrations) {
+            registration.unregister();
+            console.log('Dev Helper: Service Worker unregistered for fresh assets.');
+          }
+        });
+      }
+    }
   </script>
   <script crossorigin="anonymous" data-clerk-publishable-key="{{ clerk_publishable_key }}"
     src="https://quick-dane-37.clerk.accounts.dev/npm/@clerk/clerk-js@latest/dist/clerk.browser.js">
     </script>
-  <script src="{{ url_for('static', filename='app.js') }}"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register("{{ url_for('static', filename='sw.js') }}?v={{ cache_version }}")
+          .then(reg => console.log('Service Worker registered successfully.'))
+          .catch(err => console.log('Service Worker registration failed:', err));
+      });
+    }
+  </script>
+  <script src="{{ url_for('static', filename='app.js') }}?v={{ cache_version }}"></script>
 </body>
+
 </html>
